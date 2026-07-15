@@ -328,6 +328,96 @@ coproc adapter -> host adapter
 protocol -> RTOS/HAL/厂商 SDK
 ```
 
+### 6.3 子模块依赖关系
+
+以 6.2 节的依赖方向为基础，各仓库应包含的 git submodule 如下：
+
+| 仓库 | 子模块 |
+|---|---|
+| `wl-hosted-protocol` | 无 |
+| `wl-hosted-host-core` | `wl-hosted-protocol` |
+| `wl-hosted-coproc-core` | `wl-hosted-protocol` |
+| `wl-hosted-host-<ecosystem>` | `wl-hosted-host-core` |
+| `wl-hosted-coproc-<vendor-sdk>` | `wl-hosted-coproc-core` |
+| `wl-hosted-host-macos-sim` | `wl-hosted-host-core` |
+| `wl-hosted-coproc-macos-sim` | `wl-hosted-coproc-core` |
+| `wl-hosted-macos-sim-manager` | `wl-hosted-protocol`（用于协议解析） |
+| `wl-hosted-tools` | `wl-hosted-protocol`（Wire Trace Decoder、协议代码生成等） |
+| `wl-hosted-firmware-catalog` | 无代码子模块；仅元数据仓库 |
+
+说明：
+
+- Adapter、模拟器仓库只引入直接依赖的 Core 仓库；Protocol 通过 Core 的子模块间接获得，避免重复依赖和版本漂移。
+- Core 仓库只引入自己需要的 `protocol`，不引入对端 Core。
+- 若 Adapter 因生成代码、测试向量或 Preset 协议兼容性校验需要直接访问 Protocol，可额外引入 `wl-hosted-protocol`，但必须在 `SUBMODULE.lock` 中说明理由，且 CI 强制校验两个 Protocol 子模块指向同一 commit。
+- 禁止循环依赖：任何仓库不得引入依赖自己的上层仓库。
+
+### 6.4 子模块管理方式
+
+#### 6.4.1 目录约定
+
+子模块直接放在仓库根目录下，不再套一层 `submodules/` 文件夹。Adapter 仓库通常只引入直接依赖的 Core：
+
+```text
+wl-hosted-host-esp-idf/
+├── wl-hosted-host-core
+│   └── wl-hosted-protocol
+├── src/
+├── include/
+├── examples/
+└── CMakeLists.txt
+```
+
+Core 仓库则引入 `protocol`：
+
+```text
+wl-hosted-host-core/
+├── wl-hosted-protocol
+├── src/
+├── include/
+└── tests/
+```
+
+#### 6.4.2 版本固定
+
+- 所有子模块必须固定到具体 commit（推荐 tag 或 release branch 上的稳定 commit），禁止浮动分支。
+- 每个仓库维护 `SUBMODULE.lock` 或等效文件，记录子模块仓库 URL、commit SHA 和用途说明。
+- 子模块 commit 必须来自官方组织仓库；未经 ADR 不得替换为个人 fork。
+
+#### 6.4.3 日常同步命令
+
+```sh
+git submodule update --init --recursive
+git submodule update --remote --merge   # 仅在明确升级时使用
+```
+
+升级流程（以升级 Core 为例）：
+
+1. 在子模块目录 `cd wl-hosted-host-core && git fetch && git checkout <tag/commit>`；
+2. 在父仓库 `git add wl-hosted-host-core`；
+3. 同步更新 `SUBMODULE.lock`；
+4. 运行父仓库 CI；
+5. 提交并说明升级原因、协议兼容范围和影响面。
+
+升级 Core 内部的 `wl-hosted-protocol` 时，由 Core 仓库自身完成并发布新版本；Adapter 通常只需跟随 Core 版本即可。
+
+#### 6.4.4 CI 校验
+
+每次提交至少运行：
+
+- 子模块 commit 是否落在允许的兼容版本范围内；
+- 子模块目录是否存在未跟踪修改或游离 HEAD；
+- `SUBMODULE.lock` 与实际 `.gitmodules` + submodule commit 是否一致；
+- 嵌套子模块（如 `wl-hosted-host-core/wl-hosted-protocol`）是否已递归初始化且 commit 一致；
+- 若 Adapter 额外引入 `wl-hosted-protocol`，必须校验其与 Core 内部 `wl-hosted-protocol` 指向同一 commit；
+- 禁止子模块指向私有仓库或非官方 fork。
+
+#### 6.4.5 发布与升级
+
+- Core 发布新版本时，同步更新所有依赖它的 Adapter 和工具仓库的子模块 pin。
+- Protocol 发布不兼容变更时，必须同时发布迁移指南，并更新所有依赖仓库的 `SUBMODULE.lock`。
+- 禁止在发布前临时将子模块指向上游未合并分支。
+
 ---
 
 ## 7. 各仓库职责
