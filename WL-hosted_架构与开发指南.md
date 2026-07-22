@@ -51,7 +51,7 @@ Wireless Coprocessor
 仓库名和公共文档中统一使用缩写 `coproc`：
 
 ```text
-wl-hosted-coproc-core
+wl-hosted-core/coproc-core
 wl-hosted-coproc-esp-idf
 ```
 
@@ -252,9 +252,7 @@ Data Plane
 推荐的基础仓库如下：
 
 ```text
-wl-hosted-protocol
-wl-hosted-host-core
-wl-hosted-coproc-core
+wl-hosted-core
 
 wl-hosted-host-<ecosystem>
 wl-hosted-coproc-<vendor-sdk>
@@ -266,9 +264,7 @@ wl-hosted-tools
 示例：
 
 ```text
-wl-hosted-protocol
-wl-hosted-host-core
-wl-hosted-coproc-core
+wl-hosted-core
 
 wl-hosted-host-hpm-sdk
 wl-hosted-host-stm32cube
@@ -302,20 +298,20 @@ Adapter 仓库按 SDK 或生态拆分，而不是按单颗芯片拆分：
 ### 6.2 依赖方向
 
 ```text
-                    wl-hosted-protocol
-                       ▲          ▲
-                       │          │
-        wl-hosted-host-core      wl-hosted-coproc-core
-                       ▲          ▲
-                       │          │
-          wl-hosted-host-*      wl-hosted-coproc-*
+                 wl-hosted-core
+          ┌────────┼────────┐
+          │        │        │
+      protocol  host-core coproc-core
+          ▲        ▲        ▲
+          └────────┴────────┘
+       wl-hosted-host-* / wl-hosted-coproc-*
 ```
 
 允许：
 
 ```text
-host adapter -> host core -> protocol
-coproc adapter -> coproc core -> protocol
+host adapter -> wl-hosted-core/host-core
+coproc adapter -> wl-hosted-core/coproc-core
 ```
 
 禁止：
@@ -334,22 +330,19 @@ protocol -> RTOS/HAL/厂商 SDK
 
 | 仓库 | 子模块 |
 |---|---|
-| `wl-hosted-protocol` | 无 |
-| `wl-hosted-host-core` | `wl-hosted-protocol` |
-| `wl-hosted-coproc-core` | `wl-hosted-protocol` |
-| `wl-hosted-host-<ecosystem>` | `wl-hosted-host-core` |
-| `wl-hosted-coproc-<vendor-sdk>` | `wl-hosted-coproc-core` |
-| `wl-hosted-host-macos-sim` | `wl-hosted-host-core` |
-| `wl-hosted-coproc-macos-sim` | `wl-hosted-coproc-core` |
-| `wl-hosted-macos-sim-manager` | `wl-hosted-protocol`（用于协议解析） |
-| `wl-hosted-tools` | `wl-hosted-protocol`（Wire Trace Decoder、协议代码生成等） |
+| `wl-hosted-core` | 无；内含 `protocol/`、`common/`、`host-core/`、`coproc-core/` |
+| `wl-hosted-host-<ecosystem>` | `wl-hosted-core`（使用 `host-core/`） |
+| `wl-hosted-coproc-<vendor-sdk>` | `wl-hosted-core`（使用 `coproc-core/`） |
+| `wl-hosted-host-macos-sim` | `wl-hosted-core`（使用 `host-core/`） |
+| `wl-hosted-coproc-macos-sim` | `wl-hosted-core`（使用 `coproc-core/`） |
+| `wl-hosted-macos-sim-manager` | `wl-hosted-core`（使用 `protocol/`） |
+| `wl-hosted-tools` | `wl-hosted-core`（使用 `protocol/`） |
 | `wl-hosted-firmware-catalog` | 无代码子模块；仅元数据仓库 |
 
 说明：
 
-- Adapter、模拟器仓库只引入直接依赖的 Core 仓库；Protocol 通过 Core 的子模块间接获得，避免重复依赖和版本漂移。
-- Core 仓库只引入自己需要的 `protocol`，不引入对端 Core。
-- 若 Adapter 因生成代码、测试向量或 Preset 协议兼容性校验需要直接访问 Protocol，可额外引入 `wl-hosted-protocol`，但必须在 `SUBMODULE.lock` 中说明理由，且 CI 强制校验两个 Protocol 子模块指向同一 commit。
+- Adapter、模拟器和工具仓库只引入 `wl-hosted-core` 一个子模块，并从固定子目录使用所需组件。
+- `protocol`、`common`、`host-core` 与 `coproc-core` 是同一 Core 仓库内的目录，不得再作为嵌套子模块引入。
 - 禁止循环依赖：任何仓库不得引入依赖自己的上层仓库。
 
 ### 6.4 子模块管理方式
@@ -360,22 +353,24 @@ protocol -> RTOS/HAL/厂商 SDK
 
 ```text
 wl-hosted-host-esp-idf/
-├── wl-hosted-host-core
-│   └── wl-hosted-protocol
+├── core/
+│   ├── protocol/
+│   ├── common/
+│   └── host-core/
 ├── src/
 ├── include/
 ├── examples/
 └── CMakeLists.txt
 ```
 
-Core 仓库则引入 `protocol`：
+Core 仓库在同一 Git 提交中维护所有四个目录：
 
 ```text
-wl-hosted-host-core/
-├── wl-hosted-protocol
-├── src/
-├── include/
-└── tests/
+wl-hosted-core/
+├── protocol/
+├── common/
+├── host-core/
+└── coproc-core/
 ```
 
 #### 6.4.2 版本固定
@@ -387,19 +382,19 @@ wl-hosted-host-core/
 #### 6.4.3 日常同步命令
 
 ```sh
-git submodule update --init --recursive
+git submodule update --init
 git submodule update --remote --merge   # 仅在明确升级时使用
 ```
 
 升级流程（以升级 Core 为例）：
 
-1. 在子模块目录 `cd wl-hosted-host-core && git fetch && git checkout <tag/commit>`；
-2. 在父仓库 `git add wl-hosted-host-core`；
+1. 在子模块目录 `cd core && git fetch && git checkout <tag/commit>`；
+2. 在父仓库 `git add core`；
 3. 同步更新 `SUBMODULE.lock`；
 4. 运行父仓库 CI；
 5. 提交并说明升级原因、协议兼容范围和影响面。
 
-升级 Core 内部的 `wl-hosted-protocol` 时，由 Core 仓库自身完成并发布新版本；Adapter 通常只需跟随 Core 版本即可。
+升级 Protocol、Common 或任一 Core 时，由 `wl-hosted-core` 自身完成并发布新版本；Adapter 通常只需跟随 Core 版本即可。
 
 #### 6.4.4 CI 校验
 
@@ -408,8 +403,7 @@ git submodule update --remote --merge   # 仅在明确升级时使用
 - 子模块 commit 是否落在允许的兼容版本范围内；
 - 子模块目录是否存在未跟踪修改或游离 HEAD；
 - `SUBMODULE.lock` 与实际 `.gitmodules` + submodule commit 是否一致；
-- 嵌套子模块（如 `wl-hosted-host-core/wl-hosted-protocol`）是否已递归初始化且 commit 一致；
-- 若 Adapter 额外引入 `wl-hosted-protocol`，必须校验其与 Core 内部 `wl-hosted-protocol` 指向同一 commit；
+- 不存在嵌套子模块；所有 Core 目录必须来自同一 `core.commit`；
 - 禁止子模块指向私有仓库或非官方 fork。
 
 #### 6.4.5 发布与升级
@@ -422,14 +416,14 @@ git submodule update --remote --merge   # 仅在明确升级时使用
 
 ## 7. 各仓库职责
 
-### 7.1 `wl-hosted-protocol`
+### 7.1 `wl-hosted-core/protocol`
 
 这是最稳定、审查最严格的仓库，负责定义“线上传什么”。
 
 推荐目录：
 
 ```text
-wl-hosted-protocol/
+wl-hosted-core/protocol/
 ├── spec/
 │   ├── architecture.md
 │   ├── wire-format.md
@@ -502,7 +496,7 @@ wl-hosted-protocol/
 - 某个 MCU HAL；
 - 产品应用代码。
 
-### 7.2 `wl-hosted-host-core`
+### 7.2 `wl-hosted-core/host-core`
 
 负责定义 Host 侧状态机和公共运行时，回答“Host 如何工作”。
 
@@ -529,7 +523,7 @@ wl-hosted-protocol/
 - STM32 HAL、HPM SDK、ESP-IDF；
 - 某个 Coprocessor Adapter。
 
-### 7.3 `wl-hosted-coproc-core`
+### 7.3 `wl-hosted-core/coproc-core`
 
 负责 Coprocessor 侧的通用状态机和 Service Dispatcher。
 
@@ -1798,9 +1792,7 @@ Minor：向后兼容的能力增加
 各仓库独立 SemVer：
 
 ```text
-wl-hosted-protocol          v1.2.0
-wl-hosted-host-core         v0.6.1
-wl-hosted-coproc-core       v0.6.3
+wl-hosted-core              v0.1.0
 wl-hosted-host-hpm-sdk      v0.3.0
 wl-hosted-coproc-esp-idf    v0.5.2
 ```
@@ -2317,7 +2309,7 @@ Agent 在实现功能前应先确认：
 
 ## 26. ADR 建议
 
-在 `wl-hosted-protocol/spec/adr/` 维护：
+在 `wl-hosted-core/protocol/spec/adr/` 维护：
 
 ```text
 0001-project-terminology.md
